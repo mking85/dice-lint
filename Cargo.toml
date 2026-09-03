@@ -1,0 +1,10 @@
+[package]
+name = "dice-lint"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A strict-by-default linter for dice notation"
+
+[[bin]]
+name = "dice-lint"
+path = "src/main.rs"
