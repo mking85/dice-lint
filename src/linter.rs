@@ -212,3 +212,93 @@ fn check_modifiers(mut s: &str) -> Result<(), &str> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_split_basic_dice() {
+        assert_eq!(find_split("3d6"), Some(1));
+        assert_eq!(find_split("d20"), Some(0));
+        assert_eq!(find_split("4d6kh3"), Some(1));
+        assert_eq!(find_split("0d6"), Some(1));
+        assert_eq!(find_split("10d20"), Some(2));
+    }
+
+    #[test]
+    fn find_split_uppercase_d_counts() {
+        assert_eq!(find_split("3D6"), Some(1));
+        assert_eq!(find_split("D20"), Some(0));
+    }
+
+    #[test]
+    fn find_split_rejects_ordinary_words() {
+        // 'd' present but its prefix is letters, not digits, and there is no
+        // other 'd' whose prefix qualifies.
+        assert_eq!(find_split("delayed"), None);
+        assert_eq!(find_split("middle"), None);
+        assert_eq!(find_split("Dallas"), None);
+    }
+
+    #[test]
+    fn find_split_rejects_bare_d() {
+        // A lone "d" with nothing after it isn't a dice term.
+        assert_eq!(find_split("d"), None);
+        // Two 'd's in a row: neither qualifies ("" then "d" as a prefix).
+        assert_eq!(find_split("dd6"), None);
+    }
+
+    #[test]
+    fn find_split_picks_first_qualifying_d() {
+        // The first 'd' has an all-digit prefix, so it wins even though a
+        // later 'd' shows up in the modifiers.
+        assert_eq!(find_split("3d6dl2"), Some(1));
+    }
+
+    #[test]
+    fn check_modifiers_empty_is_ok() {
+        assert_eq!(check_modifiers(""), Ok(()));
+    }
+
+    #[test]
+    fn check_modifiers_keep_drop() {
+        assert_eq!(check_modifiers("kh3"), Ok(()));
+        assert_eq!(check_modifiers("kl2"), Ok(()));
+        assert_eq!(check_modifiers("dh1"), Ok(()));
+        assert_eq!(check_modifiers("dl4"), Ok(()));
+    }
+
+    #[test]
+    fn check_modifiers_reroll_and_explode() {
+        assert_eq!(check_modifiers("r1"), Ok(()));
+        assert_eq!(check_modifiers("!"), Ok(()));
+        assert_eq!(check_modifiers("!5"), Ok(()));
+    }
+
+    #[test]
+    fn check_modifiers_flat_bonus() {
+        assert_eq!(check_modifiers("+3"), Ok(()));
+        assert_eq!(check_modifiers("-1"), Ok(()));
+    }
+
+    #[test]
+    fn check_modifiers_chain() {
+        assert_eq!(check_modifiers("kh3r1+2"), Ok(()));
+        assert_eq!(check_modifiers("!+3-1"), Ok(()));
+    }
+
+    #[test]
+    fn check_modifiers_missing_digits_is_err() {
+        assert_eq!(check_modifiers("kh"), Err("kh"));
+        assert_eq!(check_modifiers("r"), Err("r"));
+        assert_eq!(check_modifiers("+"), Err("+"));
+        assert_eq!(check_modifiers("-"), Err("-"));
+    }
+
+    #[test]
+    fn check_modifiers_unknown_token_is_err() {
+        assert_eq!(check_modifiers("xyz"), Err("xyz"));
+        assert_eq!(check_modifiers("kh3xyz"), Err("xyz"));
+    }
+}
