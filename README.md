@@ -34,6 +34,13 @@ rolls.txt:5:18: warning: '5d1000' uses an unusually large side count [large-side
 The exit code is 1 if any `error` finding was reported, 0 otherwise.
 Warnings never fail the run on their own.
 
+Pass `-` instead of a file to read from stdin, useful for piping in output
+from something else:
+
+```
+$ grep loot_table *.json | dice-lint -
+```
+
 By default dice-lint is strict: it enforces lowercase `d`, an explicit dice
 count, no leading zeros, and flags suspiciously large counts or side counts.
 If your source material is looser than that on purpose (imported data,

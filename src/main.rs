@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::{self, Read};
 use std::process::ExitCode;
 
 mod linter;
@@ -37,11 +38,22 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    let text = match fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("dice-lint: could not read '{path}': {e}");
-            return ExitCode::from(2);
+    let text = if path == "-" {
+        let mut buf = String::new();
+        match io::stdin().read_to_string(&mut buf) {
+            Ok(_) => buf,
+            Err(e) => {
+                eprintln!("dice-lint: could not read stdin: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("dice-lint: could not read '{path}': {e}");
+                return ExitCode::from(2);
+            }
         }
     };
 
@@ -65,4 +77,5 @@ fn main() -> ExitCode {
 
 fn print_usage() {
     eprintln!("usage: dice-lint [--lenient] <file>");
+    eprintln!("       dice-lint [--lenient] -   (read from stdin)");
 }
