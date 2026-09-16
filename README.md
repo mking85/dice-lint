@@ -31,8 +31,15 @@ rolls.txt:4:18: error: '0d6' rolls zero dice [zero-count]
 rolls.txt:5:18: warning: '5d1000' uses an unusually large side count [large-sides]
 ```
 
-The exit code is 1 if any `error` finding was reported, 0 otherwise.
-Warnings never fail the run on their own.
+The exit code is 1 if any `error` finding was reported, 0 otherwise, and 2 if
+a file could not be read.
+
+Pass more than one file and each is checked in turn, with the path in every
+finding telling you which file it came from:
+
+```
+$ dice-lint rolls.txt loot.txt
+```
 
 Pass `-` instead of a file to read from stdin, useful for piping in output
 from something else:
