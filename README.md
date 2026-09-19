@@ -48,6 +48,17 @@ from something else:
 $ grep loot_table *.json | dice-lint -
 ```
 
+Pass `--format json` to get one JSON object per finding instead, one per
+line, useful for feeding into another tool:
+
+```
+$ dice-lint --format json rolls.txt
+{"path":"rolls.txt","line":2,"col":18,"severity":"error","rule":"uppercase-d","message":"'3D6' uses uppercase 'D'; write it lowercase"}
+{"path":"rolls.txt","line":3,"col":18,"severity":"error","rule":"implicit-count","message":"'d20' omits the dice count; write '1d20'"}
+{"path":"rolls.txt","line":4,"col":18,"severity":"error","rule":"zero-count","message":"'0d6' rolls zero dice"}
+{"path":"rolls.txt","line":5,"col":18,"severity":"warning","rule":"large-sides","message":"'5d1000' uses an unusually large side count"}
+```
+
 By default dice-lint is strict: it enforces lowercase `d`, an explicit dice
 count, no leading zeros, and flags suspiciously large counts or side counts.
 If your source material is looser than that on purpose (imported data,
