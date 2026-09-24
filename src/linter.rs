@@ -13,6 +13,75 @@ pub enum Mode {
     Lenient,
 }
 
+/// Rules that fire in both strict and lenient mode -- they catch dice that
+/// can't actually be rolled, as opposed to style issues.
+const ALWAYS_RULES: &[&str] = &[
+    "missing-sides",
+    "sides-out-of-range",
+    "count-out-of-range",
+    "bad-modifier",
+    "zero-count",
+    "zero-sides",
+];
+
+/// Rules that only fire in strict mode by default.
+const STRICT_ONLY_RULES: &[&str] = &[
+    "uppercase-d",
+    "implicit-count",
+    "leading-zero",
+    "flat-die",
+    "large-count",
+    "large-sides",
+];
+
+fn default_enabled(rule: &str, mode: Mode) -> bool {
+    if STRICT_ONLY_RULES.contains(&rule) {
+        mode == Mode::Strict
+    } else {
+        true
+    }
+}
+
+/// Per-rule overrides parsed from `--rules`, layered on top of whatever a
+/// rule would do by default in the current mode.
+#[derive(Clone, Default)]
+pub struct RuleFilter {
+    overrides: Vec<(String, bool)>,
+}
+
+impl RuleFilter {
+    /// Parses a comma-separated list of rule ids, each optionally prefixed
+    /// with '+' (enable, the default if no prefix is given) or '-' (disable).
+    /// Returns an error naming the first id that isn't a known rule.
+    pub fn parse(spec: &str) -> Result<RuleFilter, String> {
+        let mut overrides = Vec::new();
+        for part in spec.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let (enabled, id) = match part.strip_prefix('-') {
+                Some(rest) => (false, rest),
+                None => (true, part.strip_prefix('+').unwrap_or(part)),
+            };
+            if !ALWAYS_RULES.contains(&id) && !STRICT_ONLY_RULES.contains(&id) {
+                return Err(format!("unknown rule id '{id}'"));
+            }
+            overrides.push((id.to_string(), enabled));
+        }
+        Ok(RuleFilter { overrides })
+    }
+
+    fn is_enabled(&self, rule: &str, mode: Mode) -> bool {
+        for (id, enabled) in self.overrides.iter().rev() {
+            if id == rule {
+                return *enabled;
+            }
+        }
+        default_enabled(rule, mode)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -36,23 +105,23 @@ pub struct Finding {
     pub message: String,
 }
 
-pub fn lint_text(text: &str, mode: Mode) -> Vec<Finding> {
+pub fn lint_text(text: &str, mode: Mode, rules: &RuleFilter) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (i, line) in text.lines().enumerate() {
-        lint_line(line, i + 1, mode, &mut findings);
+        lint_line(line, i + 1, mode, rules, &mut findings);
     }
     findings
 }
 
-fn lint_line(line: &str, line_no: usize, mode: Mode, out: &mut Vec<Finding>) {
+fn lint_line(line: &str, line_no: usize, mode: Mode, rules: &RuleFilter, out: &mut Vec<Finding>) {
     for word in line.split_whitespace() {
         let byte_start = word.as_ptr() as usize - line.as_ptr() as usize;
         let col = line[..byte_start].chars().count() + 1;
-        lint_word(word, line_no, col, mode, out);
+        lint_word(word, line_no, col, mode, rules, out);
     }
 }
 
-fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, out: &mut Vec<Finding>) {
+fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, rules: &RuleFilter, out: &mut Vec<Finding>) {
     if !raw.is_ascii() {
         return;
     }
@@ -76,7 +145,9 @@ fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, out: &mut Vec<Findi
     let modifiers_str = &rest[sides_str.len()..];
 
     let mut push = |severity: Severity, rule: &'static str, message: String| {
-        out.push(Finding { line, col, severity, rule, message });
+        if rules.is_enabled(rule, mode) {
+            out.push(Finding { line, col, severity, rule, message });
+        }
     };
 
     if sides_str.is_empty() {
@@ -116,10 +187,6 @@ fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, out: &mut Vec<Findi
     }
     if sides_val == 0 {
         push(Severity::Error, "zero-sides", format!("'{word}' has a die with zero sides"));
-    }
-
-    if mode == Mode::Lenient {
-        return;
     }
 
     if d_byte == b'D' {
@@ -300,5 +367,50 @@ mod tests {
     fn check_modifiers_unknown_token_is_err() {
         assert_eq!(check_modifiers("xyz"), Err("xyz"));
         assert_eq!(check_modifiers("kh3xyz"), Err("xyz"));
+    }
+
+    #[test]
+    fn rule_filter_defaults_match_mode() {
+        let rules = RuleFilter::default();
+        assert!(rules.is_enabled("flat-die", Mode::Strict));
+        assert!(!rules.is_enabled("flat-die", Mode::Lenient));
+        assert!(rules.is_enabled("zero-count", Mode::Strict));
+        assert!(rules.is_enabled("zero-count", Mode::Lenient));
+    }
+
+    #[test]
+    fn rule_filter_disables_a_rule() {
+        let rules = RuleFilter::parse("-flat-die").unwrap();
+        assert!(!rules.is_enabled("flat-die", Mode::Strict));
+        assert!(rules.is_enabled("large-sides", Mode::Strict));
+    }
+
+    #[test]
+    fn rule_filter_enables_a_strict_only_rule_in_lenient_mode() {
+        let rules = RuleFilter::parse("+leading-zero").unwrap();
+        assert!(rules.is_enabled("leading-zero", Mode::Lenient));
+    }
+
+    #[test]
+    fn rule_filter_bare_id_means_enable() {
+        let rules = RuleFilter::parse("leading-zero").unwrap();
+        assert!(rules.is_enabled("leading-zero", Mode::Lenient));
+    }
+
+    #[test]
+    fn rule_filter_later_entry_wins() {
+        let rules = RuleFilter::parse("-flat-die,+flat-die").unwrap();
+        assert!(rules.is_enabled("flat-die", Mode::Strict));
+    }
+
+    #[test]
+    fn rule_filter_rejects_unknown_id() {
+        assert!(RuleFilter::parse("-not-a-rule").is_err());
+    }
+
+    #[test]
+    fn rule_filter_ignores_blank_entries() {
+        let rules = RuleFilter::parse(" -flat-die, ,").unwrap();
+        assert!(!rules.is_enabled("flat-die", Mode::Strict));
     }
 }

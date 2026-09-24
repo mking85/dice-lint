@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 mod linter;
 
-use linter::{lint_text, Mode, Severity};
+use linter::{lint_text, Mode, RuleFilter, Severity};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Format {
@@ -17,6 +17,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut lenient = false;
     let mut format = Format::Text;
+    let mut rules = RuleFilter::default();
     let mut paths: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -39,6 +40,22 @@ fn main() -> ExitCode {
                     "json" => Format::Json,
                     other => {
                         eprintln!("dice-lint: unknown format '{other}', expected 'text' or 'json'");
+                        print_usage();
+                        return ExitCode::from(2);
+                    }
+                };
+            }
+            "--rules" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("dice-lint: --rules requires a value, e.g. '-flat-die,+leading-zero'");
+                    print_usage();
+                    return ExitCode::from(2);
+                };
+                rules = match RuleFilter::parse(value) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("dice-lint: {e}");
                         print_usage();
                         return ExitCode::from(2);
                     }
@@ -85,7 +102,7 @@ fn main() -> ExitCode {
             }
         };
 
-        for f in lint_text(&text, mode) {
+        for f in lint_text(&text, mode, &rules) {
             if f.severity == Severity::Error {
                 had_error = true;
             }
@@ -118,8 +135,11 @@ fn main() -> ExitCode {
 }
 
 fn print_usage() {
-    eprintln!("usage: dice-lint [--lenient] [--format text|json] <file>...");
-    eprintln!("       dice-lint [--lenient] [--format text|json] -   (read from stdin)");
+    eprintln!("usage: dice-lint [--lenient] [--format text|json] [--rules SPEC] <file>...");
+    eprintln!("       dice-lint [--lenient] [--format text|json] [--rules SPEC] -   (read from stdin)");
+    eprintln!();
+    eprintln!("--rules SPEC   comma-separated rule ids to turn on/off, e.g. '-flat-die,-large-count'");
+    eprintln!("               (a bare id or one prefixed with '+' turns it on, '-' turns it off)");
 }
 
 /// Escapes a string for use inside a JSON string literal. Findings echo

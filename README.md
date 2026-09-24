@@ -71,6 +71,21 @@ $ dice-lint --lenient rolls.txt
 rolls.txt:4:18: error: '0d6' rolls zero dice [zero-count]
 ```
 
+Pass `--rules` to turn individual rules on or off, regardless of what the
+current mode would do by default. The value is a comma-separated list of
+rule ids, each optionally prefixed with `-` (turn off) or `+` (turn on, same
+as no prefix). Later entries win if an id shows up twice:
+
+```
+$ dice-lint --rules -large-sides rolls.txt
+rolls.txt:2:18: error: '3D6' uses uppercase 'D'; write it lowercase [uppercase-d]
+rolls.txt:3:18: error: 'd20' omits the dice count; write '1d20' [implicit-count]
+rolls.txt:4:18: error: '0d6' rolls zero dice [zero-count]
+```
+
+This composes with `--lenient`: `--lenient --rules +leading-zero` runs only
+the correctness checks plus `leading-zero`.
+
 ## Rules
 
 | rule | mode | meaning |
