@@ -1,5 +1,5 @@
-//! Finds dice-notation tokens (`3d6`, `d20`, `4d6kh3`, ...) inside plain text
-//! and checks each one against a fixed rule set.
+//! Finds dice-notation tokens (`3d6`, `d20`, `4d6kh3`, `d%`, `4dF`, ...)
+//! inside plain text and checks each one against a fixed rule set.
 //!
 //! A "word" is anything between whitespace. We only attempt to parse a word
 //! as dice notation if there is a 'd'/'D' whose prefix (from the start of the
@@ -141,8 +141,8 @@ fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, rules: &RuleFilter,
     let count_str = &word[..split];
     let d_byte = word.as_bytes()[split];
     let rest = &word[split + 1..];
-    let sides_str = leading_digits(rest);
-    let modifiers_str = &rest[sides_str.len()..];
+    let (sides, sides_len) = parse_sides(rest);
+    let modifiers_str = &rest[sides_len..];
 
     let mut push = |severity: Severity, rule: &'static str, message: String| {
         if rules.is_enabled(rule, mode) {
@@ -150,19 +150,26 @@ fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, rules: &RuleFilter,
         }
     };
 
-    if sides_str.is_empty() {
-        push(
-            Severity::Error,
-            "missing-sides",
-            format!("'{word}' is missing the number of sides after 'd'"),
-        );
-        return;
-    }
-
-    let sides_val: Option<u64> = sides_str.parse().ok();
-    let Some(sides_val) = sides_val else {
-        push(Severity::Error, "sides-out-of-range", format!("'{word}' has a sides count too large to evaluate"));
-        return;
+    let sides_val: Option<u64> = match sides {
+        Sides::Numeric(s) if s.is_empty() => {
+            push(
+                Severity::Error,
+                "missing-sides",
+                format!("'{word}' is missing the number of sides after 'd'"),
+            );
+            return;
+        }
+        Sides::Numeric(s) => match s.parse() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                push(Severity::Error, "sides-out-of-range", format!("'{word}' has a sides count too large to evaluate"));
+                return;
+            }
+        },
+        // Percentile (d%) and fudge (dF) dice have a fixed, non-numeric side
+        // spec, so the numeric-only checks below (zero-sides, leading-zero,
+        // flat-die, large-sides) don't apply to them.
+        Sides::Percentile | Sides::Fudge => None,
     };
 
     let count_val: Option<u64> = if count_str.is_empty() {
@@ -185,7 +192,7 @@ fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, rules: &RuleFilter,
     if count_val == Some(0) {
         push(Severity::Error, "zero-count", format!("'{word}' rolls zero dice"));
     }
-    if sides_val == 0 {
+    if sides_val == Some(0) {
         push(Severity::Error, "zero-sides", format!("'{word}' has a die with zero sides"));
     }
 
@@ -198,10 +205,12 @@ fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, rules: &RuleFilter,
     if count_str.len() > 1 && count_str.starts_with('0') {
         push(Severity::Warning, "leading-zero", format!("'{word}' has a leading zero in the dice count"));
     }
-    if sides_str.len() > 1 && sides_str.starts_with('0') {
-        push(Severity::Warning, "leading-zero", format!("'{word}' has a leading zero in the sides count"));
+    if let Sides::Numeric(sides_str) = sides {
+        if sides_str.len() > 1 && sides_str.starts_with('0') {
+            push(Severity::Warning, "leading-zero", format!("'{word}' has a leading zero in the sides count"));
+        }
     }
-    if sides_val == 1 {
+    if sides_val == Some(1) {
         push(Severity::Warning, "flat-die", format!("'{word}' always rolls 1; a flat modifier is clearer"));
     }
     if let Some(c) = count_val {
@@ -209,8 +218,32 @@ fn lint_word(raw: &str, line: usize, col: usize, mode: Mode, rules: &RuleFilter,
             push(Severity::Warning, "large-count", format!("'{word}' rolls an unusually large number of dice"));
         }
     }
-    if sides_val > 1000 {
+    if sides_val.is_some_and(|v| v > 1000) {
         push(Severity::Warning, "large-sides", format!("'{word}' uses an unusually large side count"));
+    }
+}
+
+/// The side spec of a dice term: a plain number (`d6`), a percentile die
+/// (`d%`, equivalent to `d100`), or a fudge/Fate die (`dF`, each one rolling
+/// -1, 0, or +1). The latter two have no numeric value, so the sides-related
+/// numeric checks (zero-sides, leading-zero, flat-die, large-sides) skip them.
+enum Sides<'a> {
+    Numeric(&'a str),
+    Percentile,
+    Fudge,
+}
+
+/// Reads the side spec right after the 'd', returning it along with how many
+/// bytes of `rest` it consumed (the remainder is the modifier chain).
+fn parse_sides(rest: &str) -> (Sides<'_>, usize) {
+    if rest.starts_with('%') {
+        (Sides::Percentile, 1)
+    } else if rest.starts_with('F') || rest.starts_with('f') {
+        (Sides::Fudge, 1)
+    } else {
+        let digits = leading_digits(rest);
+        let len = digits.len();
+        (Sides::Numeric(digits), len)
     }
 }
 
@@ -228,7 +261,7 @@ fn find_split(word: &str) -> Option<usize> {
         }
         if prefix.is_empty() {
             if let Some(&next) = bytes.get(i + 1) {
-                if next.is_ascii_digit() {
+                if next.is_ascii_digit() || next == b'%' || next == b'F' || next == b'f' {
                     return Some(i);
                 }
             }
@@ -314,6 +347,15 @@ mod tests {
         assert_eq!(find_split("d"), None);
         // Two 'd's in a row: neither qualifies ("" then "d" as a prefix).
         assert_eq!(find_split("dd6"), None);
+    }
+
+    #[test]
+    fn find_split_percentile_and_fudge() {
+        assert_eq!(find_split("d%"), Some(0));
+        assert_eq!(find_split("2d%"), Some(1));
+        assert_eq!(find_split("dF"), Some(0));
+        assert_eq!(find_split("df"), Some(0));
+        assert_eq!(find_split("4dF"), Some(1));
     }
 
     #[test]
@@ -412,5 +454,62 @@ mod tests {
     fn rule_filter_ignores_blank_entries() {
         let rules = RuleFilter::parse(" -flat-die, ,").unwrap();
         assert!(!rules.is_enabled("flat-die", Mode::Strict));
+    }
+
+    fn rule_ids(word: &str, mode: Mode) -> Vec<&'static str> {
+        lint_text(word, mode, &RuleFilter::default())
+            .iter()
+            .map(|f| f.rule)
+            .collect()
+    }
+
+    #[test]
+    fn percentile_dice_with_explicit_count_is_clean() {
+        assert_eq!(rule_ids("2d%", Mode::Strict), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn percentile_dice_without_count_is_implicit() {
+        assert_eq!(rule_ids("d%", Mode::Strict), vec!["implicit-count"]);
+        assert_eq!(rule_ids("d%", Mode::Lenient), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn percentile_dice_zero_count_still_errors() {
+        assert_eq!(rule_ids("0d%", Mode::Strict), vec!["zero-count"]);
+    }
+
+    #[test]
+    fn percentile_dice_skips_numeric_sides_rules() {
+        // No zero-sides, leading-zero, flat-die, or large-sides: '%' isn't a
+        // number, so none of those numeric checks apply.
+        assert_eq!(rule_ids("3d%+5", Mode::Strict), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn fudge_dice_with_explicit_count_is_clean() {
+        assert_eq!(rule_ids("4dF", Mode::Strict), Vec::<&str>::new());
+        assert_eq!(rule_ids("4df", Mode::Strict), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn fudge_dice_without_count_is_implicit() {
+        assert_eq!(rule_ids("dF", Mode::Strict), vec!["implicit-count"]);
+    }
+
+    #[test]
+    fn fudge_dice_accepts_flat_modifier() {
+        assert_eq!(rule_ids("4dF+2", Mode::Strict), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn fudge_dice_rejects_bad_modifier() {
+        assert_eq!(rule_ids("4dFxyz", Mode::Strict), vec!["bad-modifier"]);
+    }
+
+    #[test]
+    fn uppercase_d_still_flagged_for_percentile_and_fudge() {
+        assert_eq!(rule_ids("2D%", Mode::Strict), vec!["uppercase-d"]);
+        assert_eq!(rule_ids("2DF", Mode::Strict), vec!["uppercase-d"]);
     }
 }

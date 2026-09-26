@@ -86,6 +86,18 @@ rolls.txt:4:18: error: '0d6' rolls zero dice [zero-count]
 This composes with `--lenient`: `--lenient --rules +leading-zero` runs only
 the correctness checks plus `leading-zero`.
 
+Percentile dice (`d%`, `3d%`) and fudge/Fate dice (`dF`, `4dF`) are recognized
+too. Neither has a numeric side count, so the sides-related rules that only
+make sense for a number (`zero-sides`, `leading-zero` on the sides, `flat-die`,
+`large-sides`) don't apply to them, but count-related rules (`implicit-count`,
+`zero-count`, `large-count`) and `uppercase-d` still do:
+
+```
+$ dice-lint --format json - <<< 'd% and 4DF'
+{"path":"-","line":1,"col":1,"severity":"error","rule":"implicit-count","message":"'d%' omits the dice count; write '1d%'"}
+{"path":"-","line":1,"col":9,"severity":"error","rule":"uppercase-d","message":"'4DF' uses uppercase 'D'; write it lowercase"}
+```
+
 ## Rules
 
 | rule | mode | meaning |
@@ -100,6 +112,10 @@ the correctness checks plus `leading-zero`.
 | `leading-zero` | strict only | `03d06` |
 | `flat-die` | strict only | `2d1` is always 2, better written as `+2` |
 | `large-count` / `large-sides` | strict only | count over 100 or sides over 1000, likely a typo |
+
+`zero-sides`, `leading-zero` (sides), `flat-die`, and `large-sides` only apply
+to a numeric sides count, so they never fire for percentile (`d%`) or fudge
+(`dF`) dice.
 
 ## Building
 
